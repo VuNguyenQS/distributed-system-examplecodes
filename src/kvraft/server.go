@@ -1,12 +1,13 @@
 package kvraft
 
 import (
-	"6.5840/labgob"
-	"6.5840/labrpc"
-	"6.5840/raft"
 	"log"
 	"sync"
 	"sync/atomic"
+
+	"6.5840/labgob"
+	"6.5840/labrpc"
+	"6.5840/raft"
 )
 
 const Debug = false
@@ -18,11 +19,13 @@ func DPrintf(format string, a ...interface{}) (n int, err error) {
 	return
 }
 
-
 type Op struct {
 	// Your definitions here.
 	// Field names must start with capital letters,
 	// otherwise RPC will break.
+	Op    string
+	Key   string
+	Value string
 }
 
 type KVServer struct {
@@ -35,15 +38,67 @@ type KVServer struct {
 	maxraftstate int // snapshot if log grows this big
 
 	// Your definitions here.
+	data      map[string]string
+	commitMsg map[int]Op
+	cond      sync.Cond
 }
-
 
 func (kv *KVServer) Get(args *GetArgs, reply *GetReply) {
 	// Your code here.
+	// Get command
+	command := Op{"Get", args.Key, ""}
+	index, _, isLeader := kv.rf.Start(command)
+	if !isLeader {
+		reply.Err = ErrWrongLeader
+		reply.Leader = kv.rf.Leaderis()
+		return
+	}
+	// Wait for index commit
+	var commitCommand Op
+	ok := false
+
+	kv.mu.Lock()
+	defer kv.mu.Unlock()
+	for {
+		log.Printf("%d: kvserver still waiting\n", kv.me)
+		if commitCommand, ok = kv.commitMsg[index]; ok {
+			break
+		}
+		kv.cond.Wait()
+	}
+	if commitCommand == command {
+		delete(kv.commitMsg, index)
+		reply.Err = OK
+		reply.Value = kv.data[args.Key]
+	}
+
 }
 
 func (kv *KVServer) PutAppend(args *PutAppendArgs, reply *PutAppendReply) {
 	// Your code here.
+	command := Op{args.Op, args.Key, args.Value}
+	index, _, isLeader := kv.rf.Start(command)
+	if !isLeader {
+		reply.Err = ErrWrongLeader
+		reply.Leader = kv.rf.Leaderis()
+		return
+	}
+	// Wait for index commit
+	var commitCommand Op
+	ok := false
+	kv.mu.Lock()
+	defer kv.mu.Unlock()
+	for {
+		log.Printf("%d: kvserver still waiting\n", kv.me)
+		if commitCommand, ok = kv.commitMsg[index]; ok {
+			break
+		}
+		kv.cond.Wait()
+	}
+	if commitCommand == command {
+		delete(kv.commitMsg, index)
+		reply.Err = OK
+	}
 }
 
 // the tester calls Kill() when a KVServer instance won't
@@ -90,8 +145,33 @@ func StartKVServer(servers []*labrpc.ClientEnd, me int, persister *raft.Persiste
 
 	kv.applyCh = make(chan raft.ApplyMsg)
 	kv.rf = raft.Make(servers, me, persister, kv.applyCh)
+	kv.data = make(map[string]string)
+	kv.commitMsg = map[int]Op{}
+	kv.cond = *sync.NewCond(&kv.mu)
 
 	// You may need initialization code here.
+	go kv.applier(kv.applyCh)
 
 	return kv
+}
+
+func (kv *KVServer) applier(applyChan chan raft.ApplyMsg) {
+	var command Op
+	for m := range applyChan {
+		log.Printf("%d: applymessage %v\n", kv.me, m)
+		if m.CommandValid {
+			command = m.Command.(Op)
+			//fmt.Println("lock")
+			kv.mu.Lock()
+			kv.commitMsg[m.CommandIndex] = command
+			if command.Op == "Put" {
+				kv.data[command.Key] = command.Value
+			} else if command.Op == "Append" {
+				kv.data[command.Key] = kv.data[command.Key] + command.Value
+			}
+			kv.cond.Broadcast()
+			kv.mu.Unlock()
+			//fmt.Println("unlock")
+		}
+	}
 }

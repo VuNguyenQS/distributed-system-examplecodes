@@ -345,3 +345,7 @@ func Make(peers []*labrpc.ClientEnd, me int,
 
 	return rf
 }
+
+func (rf *Raft) Leaderis() int {
+	return rf.leader.leaderId
+}
