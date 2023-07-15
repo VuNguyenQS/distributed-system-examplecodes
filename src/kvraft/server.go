@@ -1,6 +1,7 @@
 package kvraft
 
 import (
+	"bytes"
 	"log"
 	"sync"
 	"sync/atomic"
@@ -23,9 +24,11 @@ type Op struct {
 	// Your definitions here.
 	// Field names must start with capital letters,
 	// otherwise RPC will break.
-	Op    string
-	Key   string
-	Value string
+	Id     int64
+	Op     string
+	Key    string
+	Value  string
+	PrevId int64
 }
 
 type KVServer struct {
@@ -38,67 +41,58 @@ type KVServer struct {
 	maxraftstate int // snapshot if log grows this big
 
 	// Your definitions here.
-	data      map[string]string
-	commitMsg map[int]Op
-	cond      sync.Cond
+	persister      *raft.Persister
+	commitedIdx    int
+	data           map[string]string
+	appliedCommand map[int64]int
+	publisher      Broadcaster
 }
+
+// Get command
+// Check duplicate request
 
 func (kv *KVServer) Get(args *GetArgs, reply *GetReply) {
 	// Your code here.
-	// Get command
-	command := Op{"Get", args.Key, ""}
-	index, _, isLeader := kv.rf.Start(command)
-	if !isLeader {
-		reply.Err = ErrWrongLeader
-		reply.Leader = kv.rf.Leaderis()
-		return
-	}
-	// Wait for index commit
-	var commitCommand Op
-	ok := false
+	command := Op{args.Id, "Get", args.Key, "", args.PrevId}
 
-	kv.mu.Lock()
-	defer kv.mu.Unlock()
-	for {
-		log.Printf("%d: kvserver still waiting\n", kv.me)
-		if commitCommand, ok = kv.commitMsg[index]; ok {
-			break
-		}
-		kv.cond.Wait()
-	}
-	if commitCommand == command {
-		delete(kv.commitMsg, index)
+	if kv.ExcuteCommand(&command) {
 		reply.Err = OK
+		kv.mu.Lock()
 		reply.Value = kv.data[args.Key]
+		kv.mu.Unlock()
 	}
-
 }
 
 func (kv *KVServer) PutAppend(args *PutAppendArgs, reply *PutAppendReply) {
 	// Your code here.
-	command := Op{args.Op, args.Key, args.Value}
-	index, _, isLeader := kv.rf.Start(command)
-	if !isLeader {
-		reply.Err = ErrWrongLeader
-		reply.Leader = kv.rf.Leaderis()
-		return
-	}
-	// Wait for index commit
-	var commitCommand Op
-	ok := false
-	kv.mu.Lock()
-	defer kv.mu.Unlock()
-	for {
-		log.Printf("%d: kvserver still waiting\n", kv.me)
-		if commitCommand, ok = kv.commitMsg[index]; ok {
-			break
-		}
-		kv.cond.Wait()
-	}
-	if commitCommand == command {
-		delete(kv.commitMsg, index)
+	command := Op{args.Id, args.Op, args.Key, args.Value, args.PrevId}
+
+	if kv.ExcuteCommand(&command) {
 		reply.Err = OK
 	}
+}
+
+func (kv *KVServer) ExcuteCommand(command *Op) bool {
+	kv.mu.Lock()
+	if _, ok := kv.appliedCommand[command.Id]; ok {
+		kv.mu.Unlock()
+		return true
+	}
+	kv.mu.Unlock()
+
+	idx := make(chan int)
+	done := make(chan Op)
+	kv.publisher.Subscribe(idx, done)
+
+	index, _, isLeader := kv.rf.Start(*command)
+	idx <- index
+	if !isLeader {
+		return false
+	}
+
+	commitCommand := <-done
+	return commitCommand == *command
+
 }
 
 // the tester calls Kill() when a KVServer instance won't
@@ -142,12 +136,11 @@ func StartKVServer(servers []*labrpc.ClientEnd, me int, persister *raft.Persiste
 	kv.maxraftstate = maxraftstate
 
 	// You may need initialization code here.
-
+	kv.persister = persister
+	kv.ReadBackup()
 	kv.applyCh = make(chan raft.ApplyMsg)
 	kv.rf = raft.Make(servers, me, persister, kv.applyCh)
-	kv.data = make(map[string]string)
-	kv.commitMsg = map[int]Op{}
-	kv.cond = *sync.NewCond(&kv.mu)
+	kv.publisher.rf = kv.rf
 
 	// You may need initialization code here.
 	go kv.applier(kv.applyCh)
@@ -158,20 +151,72 @@ func StartKVServer(servers []*labrpc.ClientEnd, me int, persister *raft.Persiste
 func (kv *KVServer) applier(applyChan chan raft.ApplyMsg) {
 	var command Op
 	for m := range applyChan {
-		log.Printf("%d: applymessage %v\n", kv.me, m)
 		if m.CommandValid {
 			command = m.Command.(Op)
-			//fmt.Println("lock")
-			kv.mu.Lock()
-			kv.commitMsg[m.CommandIndex] = command
-			if command.Op == "Put" {
-				kv.data[command.Key] = command.Value
-			} else if command.Op == "Append" {
-				kv.data[command.Key] = kv.data[command.Key] + command.Value
+			if m.CommandIndex != kv.commitedIdx+1 {
+				log.Fatalf("commitedIdx %v while newcommtiedIdx %v\n", kv.commitedIdx, m.CommandIndex)
 			}
-			kv.cond.Broadcast()
+			kv.commitedIdx = m.CommandIndex
+			kv.mu.Lock()
+
+			if _, ok := kv.appliedCommand[command.Id]; !ok {
+				if command.Op == "Put" {
+					kv.data[command.Key] = command.Value
+				} else if command.Op == "Append" {
+					kv.data[command.Key] = kv.data[command.Key] + command.Value
+				}
+				kv.appliedCommand[command.Id] = m.CommandIndex
+				delete(kv.appliedCommand, command.PrevId)
+			}
+
+			if kv.maxraftstate > 0 && kv.persister.RaftStateSize() > kv.maxraftstate {
+				kv.SnapState(kv.commitedIdx)
+			}
+
 			kv.mu.Unlock()
-			//fmt.Println("unlock")
+
+			kv.publisher.BroadcastMsg(m)
+		} else if m.SnapshotValid {
+			kv.ReadBackup()
 		}
 	}
+	// KvServer got killed
+	kv.publisher.Terminate()
+}
+
+func (kv *KVServer) SnapState(index int) {
+	w := new(bytes.Buffer)
+	e := labgob.NewEncoder(w)
+	e.Encode(index)
+	e.Encode(kv.data)
+	e.Encode(kv.appliedCommand)
+	snap := w.Bytes()
+	kv.rf.Snapshot(index, snap)
+}
+
+func (kv *KVServer) ReadBackup() {
+	backup := kv.persister.ReadSnapshot()
+	if backup == nil || len(backup) < 1 {
+		kv.data = make(map[string]string)
+		kv.appliedCommand = make(map[int64]int)
+		return
+	}
+
+	r := bytes.NewBuffer(backup)
+	d := labgob.NewDecoder(r)
+	var commitedIdx int
+	var dataBase map[string]string
+	var appliedCMD map[int64]int
+	if err := d.Decode(&commitedIdx); err != nil {
+		log.Fatalf("Decode commitedIdx %v\n", err)
+	}
+	if err := d.Decode(&dataBase); err != nil {
+		log.Fatalf("Decode data %v\n", err)
+	}
+	if err := d.Decode(&appliedCMD); err != nil {
+		log.Fatalf("Decode appliedCommand table %v\n", err)
+	}
+	kv.commitedIdx = commitedIdx
+	kv.data = dataBase
+	kv.appliedCommand = appliedCMD
 }

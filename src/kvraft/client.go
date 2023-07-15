@@ -2,8 +2,8 @@ package kvraft
 
 import (
 	"crypto/rand"
-	"fmt"
 	"math/big"
+	"time"
 
 	"6.5840/labrpc"
 )
@@ -11,7 +11,8 @@ import (
 type Clerk struct {
 	servers []*labrpc.ClientEnd
 	// You will have to modify this struct.
-	leader int
+	leader          int
+	lastCompletedId int64
 }
 
 func nrand() int64 {
@@ -41,27 +42,29 @@ func MakeClerk(servers []*labrpc.ClientEnd) *Clerk {
 func (ck *Clerk) Get(key string) string {
 
 	// You will have to modify this function.
-	args := GetArgs{key}
-	var reply GetReply
-	i := 0
-	//ok := false
-	for ; reply.Err != OK; i++ {
+	args := GetArgs{nrand(), key, ck.lastCompletedId}
+	for i := 0; ; i++ {
 		// Choose randomly other servers
-		fmt.Printf("get key %v with i is %v\n", key, i)
 		reply := GetReply{}
-		ck.servers[i%len(ck.servers)].Call("KVServer.Get", &args, &reply)
-		/*
-			if ok {
-				if reply.Err != OK {
-					ck.leader = reply.Leader
-					i = -1
-					ok = false
-				}
-			}
-		*/
-	}
+		done := make(chan bool)
+		timeout := time.After(time.Second)
+		go func() {
+			done <- ck.servers[(ck.leader+i)%len(ck.servers)].Call("KVServer.Get", &args, &reply)
+		}()
 
-	return reply.Value
+		select {
+		case <-done:
+			if reply.Err == OK {
+				ck.leader = (ck.leader + i) % len(ck.servers)
+				ck.lastCompletedId = args.Id
+				return reply.Value
+			}
+		case <-timeout:
+			go func() {
+				<-done
+			}()
+		}
+	}
 }
 
 // shared by Put and Append.
@@ -74,24 +77,27 @@ func (ck *Clerk) Get(key string) string {
 // arguments. and reply must be passed as a pointer.
 func (ck *Clerk) PutAppend(key string, value string, op string) {
 	// You will have to modify this function.
-	args := PutAppendArgs{key, value, op}
-	var reply PutAppendReply
-	i := 0
-	for ; reply.Err != OK; i++ {
-		// Choose randomly other servers
-		//fmt.Printf("PutAppend key %v with i is %v\n", key, i)
-		reply = PutAppendReply{}
-		ck.servers[i%len(ck.servers)].Call("KVServer.PutAppend", &args, &reply)
-		fmt.Printf("reply is %v\n", reply)
-		/*
-			if ok {
-				if reply.Err != OK {
-					ck.leader = reply.Leader
-					i = -1
-					ok = false
-				}
+	args := PutAppendArgs{nrand(), key, value, op, ck.lastCompletedId}
+	for i := 0; ; i++ {
+		reply := PutAppendReply{}
+		done := make(chan bool)
+		timeOut := time.After(time.Second)
+		go func() {
+			done <- ck.servers[(ck.leader+i)%len(ck.servers)].Call("KVServer.PutAppend", &args, &reply)
+		}()
+
+		select {
+		case <-done:
+			if reply.Err == OK {
+				ck.leader = (ck.leader + i) % len(ck.servers)
+				ck.lastCompletedId = args.Id
+				return
 			}
-		*/
+		case <-timeOut:
+			go func() {
+				<-done
+			}()
+		}
 	}
 }
 

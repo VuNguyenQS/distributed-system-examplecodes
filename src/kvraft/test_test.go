@@ -3,7 +3,6 @@ package kvraft
 import (
 	"fmt"
 	"io/ioutil"
-	"log"
 	"math/rand"
 	"strconv"
 	"strings"
@@ -122,10 +121,10 @@ func spawn_clients_and_wait(t *testing.T, cfg *config, ncli int, fn func(me int,
 		ca[cli] = make(chan bool)
 		go run_client(t, cfg, cli, ca[cli], fn)
 	}
-	log.Printf("spawn_clients_and_wait: waiting for clients")
+	// log.Printf("spawn_clients_and_wait: waiting for clients")
 	for cli := 0; cli < ncli; cli++ {
 		ok := <-ca[cli]
-		log.Printf("spawn_clients_and_wait: client %d is done\n", cli)
+		// log.Printf("spawn_clients_and_wait: client %d is done\n", cli)
 		if ok == false {
 			t.Fatalf("failure")
 		}
@@ -278,9 +277,9 @@ func GenericTest(t *testing.T, part string, nclients int, nservers int, unreliab
 					key = strconv.Itoa(cli)
 				}
 				nv := "x " + strconv.Itoa(cli) + " " + strconv.Itoa(j) + " y"
-				log.Printf("%d: client get here and nv %v\n", cli, nv)
+				// log.Printf("%d: client get here and nv %v\n", cli, nv)
 				if (rand.Int() % 1000) < 500 {
-					log.Printf("%d: client new append %v\n", cli, nv)
+					// log.Printf("%d: client new append %v\n", cli, nv)
 					Append(cfg, myck, key, nv, opLog, cli)
 					if !randomkeys {
 						last = NextValue(last, nv)
@@ -292,7 +291,7 @@ func GenericTest(t *testing.T, part string, nclients int, nservers int, unreliab
 					Put(cfg, myck, key, nv, opLog, cli)
 					j++
 				} else {
-					log.Printf("%d: client new get %v\n", cli, key)
+					// log.Printf("%d: client new get %v\n", cli, key)
 					v := Get(cfg, myck, key, opLog, cli)
 					// the following check only makes sense when we're not using random keys
 					if !randomkeys && v != last {
@@ -341,15 +340,15 @@ func GenericTest(t *testing.T, part string, nclients int, nservers int, unreliab
 			cfg.ConnectAll()
 		}
 
-		log.Printf("wait for clients\n")
+		// log.Printf("wait for clients\n")
 		for i := 0; i < nclients; i++ {
-			log.Printf("read from clients %d\n", i)
+			// log.Printf("read from clients %d\n", i)
 			j := <-clnts[i]
 			// if j < 10 {
 			// 	log.Printf("Warning: client %d managed to perform only %d put operations in 1 sec?\n", i, j)
 			// }
 			key := strconv.Itoa(i)
-			log.Printf("Check %v for client %d\n", j, i)
+			// log.Printf("Check %v for client %d\n", j, i)
 			v := Get(cfg, ck, key, opLog, 0)
 			if !randomkeys {
 				checkClntAppends(t, i, v, j)

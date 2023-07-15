@@ -104,7 +104,7 @@ func (rf *Raft) replicateCommand(server int, index int, args AppendEntriesArgs, 
 		if rf.commitedIdx < index {
 			*replicas++
 			*serverCommited = append(*serverCommited, server)
-			if *replicas > rf.numPeers/2 {
+			if !rf.killed() && *replicas > rf.numPeers/2 {
 				fmt.Fprintln(rf.out, "replicas ", *replicas, "current commitedIdx ", rf.commitedIdx, " snapshotIdx ", rf.SnapshotIdx, " and index ", index, " commited", " servers ", *serverCommited)
 				rf.commandApplyMsg(index)
 				rf.commitedIdx = index
