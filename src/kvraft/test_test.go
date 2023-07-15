@@ -1,16 +1,19 @@
 package kvraft
 
-import "6.5840/porcupine"
-import "6.5840/models"
-import "testing"
-import "strconv"
-import "time"
-import "math/rand"
-import "strings"
-import "sync"
-import "sync/atomic"
-import "fmt"
-import "io/ioutil"
+import (
+	"fmt"
+	"io/ioutil"
+	"math/rand"
+	"strconv"
+	"strings"
+	"sync"
+	"sync/atomic"
+	"testing"
+	"time"
+
+	"6.5840/models"
+	"6.5840/porcupine"
+)
 
 // The tester generously allows solutions to complete elections in one second
 // (much more than the paper's range of timeouts).
@@ -256,7 +259,8 @@ func GenericTest(t *testing.T, part string, nclients int, nservers int, unreliab
 		// log.Printf("Iteration %v\n", i)
 		atomic.StoreInt32(&done_clients, 0)
 		atomic.StoreInt32(&done_partitioner, 0)
-		go spawn_clients_and_wait(t, cfg, nclients, func(cli int, myck *Clerk, t *testing.T) {
+
+		fn := func(cli int, myck *Clerk, t *testing.T) {
 			j := 0
 			defer func() {
 				clnts[cli] <- j
@@ -273,6 +277,7 @@ func GenericTest(t *testing.T, part string, nclients int, nservers int, unreliab
 					key = strconv.Itoa(cli)
 				}
 				nv := "x " + strconv.Itoa(cli) + " " + strconv.Itoa(j) + " y"
+				// log.Printf("%d: client get here and nv %v\n", cli, nv)
 				if (rand.Int() % 1000) < 500 {
 					// log.Printf("%d: client new append %v\n", cli, nv)
 					Append(cfg, myck, key, nv, opLog, cli)
@@ -294,7 +299,8 @@ func GenericTest(t *testing.T, part string, nclients int, nservers int, unreliab
 					}
 				}
 			}
-		})
+		}
+		go spawn_clients_and_wait(t, cfg, nclients, fn)
 
 		if partitions {
 			// Allow the clients to perform some operations without interruption

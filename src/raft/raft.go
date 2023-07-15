@@ -277,6 +277,12 @@ func (rf *Raft) Start(command interface{}) (int, int, bool) {
 func (rf *Raft) Kill() {
 	atomic.StoreInt32(&rf.dead, 1)
 	// Your code here, if desired.
+	// Close applyChannel to halt kv goroutine
+	go func() {
+		rf.mu.Lock()
+		close(rf.applyChannel)
+		rf.mu.Unlock()
+	}()
 }
 
 func (rf *Raft) killed() bool {
@@ -344,4 +350,8 @@ func Make(peers []*labrpc.ClientEnd, me int,
 	go rf.startup()
 
 	return rf
+}
+
+func (rf *Raft) Leaderis() int {
+	return rf.leader.leaderId
 }
