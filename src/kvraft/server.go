@@ -81,7 +81,7 @@ func (kv *KVServer) ExcuteCommand(command *Op) bool {
 	kv.mu.Unlock()
 
 	idx := make(chan int)
-	done := make(chan Op)
+	done := make(chan interface{})
 	kv.publisher.Subscribe(idx, done)
 
 	index, _, isLeader := kv.rf.Start(*command)

@@ -1,7 +1,6 @@
 package raft
 
 import (
-	"fmt"
 	"log"
 )
 
@@ -10,9 +9,9 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 	logChange := false
 	rf.mu.Lock()
 	defer rf.mu.Unlock()
-	fmt.Fprintln(rf.out, "leaderId ", args.LeaderId, " at term ", args.Term, " our state ", rf.state, " at term ", rf.Term)
-	fmt.Fprintln(rf.out, "prevIdx ", args.PrevIdx, " prevTerm ", args.PrevTerm, " commitIdx ", args.CommitedIdx, " entries ", args.Entries)
-	fmt.Fprintln(rf.out, "our log at first ", rf.Log)
+	DFprintf(rf.out, "leaderId %v at term %v our state %v at term %v\n", args.LeaderId, args.Term, rf.state, rf.Term)
+	DFprintln(rf.out, "prevIdx ", args.PrevIdx, " prevTerm ", args.PrevTerm, " commitIdx ", args.CommitedIdx, " entries ", args.Entries)
+	DFprintln(rf.out, "our log at first ", rf.Log)
 
 	if args.Term < rf.Term {
 		reply.Success = false
@@ -80,8 +79,8 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 		}
 	}
 	// For debug
-	fmt.Fprintln(rf.out, "our log after ", rf.Log, " commitIdx ", rf.commitedIdx)
-	fmt.Fprintln(rf.out, " success ", reply.Success, " lastIdx ", reply.LastIndex, " term ", reply.Term)
+	DFprintln(rf.out, "our log after ", rf.Log, " commitIdx ", rf.commitedIdx)
+	DFprintln(rf.out, " success ", reply.Success, " lastIdx ", reply.LastIndex, " term ", reply.Term)
 
 	// Commit new entry if possible
 	if !rf.killed() && reply.Success && rf.commitedIdx < args.CommitedIdx {
@@ -99,7 +98,7 @@ func (rf *Raft) InstallSnapshot(args *InstallSnapshotArgs, reply *InstallSnapsho
 		log.Fatal("why send Snapshot at firt time")
 	}
 	if args.Term == rf.Term {
-		fmt.Fprintf(rf.out, "leaderSnapIdx %v leaderloglen %v lDcmIdx %v , oursnapIdx %v and ourloglen %v ourcmidx%v\n",
+		DFprintf(rf.out, "leaderSnapIdx %v leaderloglen %v lDcmIdx %v , oursnapIdx %v and ourloglen %v ourcmidx%v\n",
 			args.SnapshotIndex, len(args.Log), args.CommitedIdx, rf.SnapshotIdx, len(rf.Log), rf.commitedIdx)
 
 		// Set new wait
@@ -157,7 +156,7 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 	defer rf.mu.Unlock()
 
 	// debug info
-	fmt.Fprintln(rf.out, "requestvote from server ", args.CandidateId, " at term ", args.Term, " and we are at sate ", rf.state, " at term ", rf.Term)
+	DFprintln(rf.out, "requestvote from server ", args.CandidateId, " at term ", args.Term, " and we are at sate ", rf.state, " at term ", rf.Term)
 
 	reply.Term = rf.Term
 	reply.LastLogTerm = rf.Log[len(rf.Log)-1].Term
@@ -196,5 +195,5 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 			}
 		}
 	}
-	fmt.Fprintln(rf.out, "we reply ", reply)
+	DFprintln(rf.out, "we reply ", reply)
 }

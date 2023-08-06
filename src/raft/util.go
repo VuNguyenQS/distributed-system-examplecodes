@@ -1,13 +1,23 @@
 package raft
 
-import "log"
+import (
+	"fmt"
+	"io"
+)
 
 // Debugging
 const Debug = false
 
-func DPrintf(format string, a ...interface{}) (n int, err error) {
+func DFprintf(w io.Writer, format string, a ...interface{}) (n int, err error) {
 	if Debug {
-		log.Printf(format, a...)
+		fmt.Fprintf(w, format, a...)
+	}
+	return
+}
+
+func DFprintln(w io.Writer, a ...interface{}) (n int, err error) {
+	if Debug {
+		fmt.Println(w, a)
 	}
 	return
 }

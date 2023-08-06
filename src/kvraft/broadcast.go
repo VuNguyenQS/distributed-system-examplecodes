@@ -18,7 +18,7 @@ type Broadcaster struct {
 	subs       []*Subscriber
 }
 
-func (b *Broadcaster) Subscribe(idx chan int, done chan Op) {
+func (b *Broadcaster) Subscribe(idx chan int, done chan interface{}) {
 	sub := Subscriber{true, make(chan raft.ApplyMsg)}
 
 	go func() {
@@ -42,14 +42,14 @@ func (b *Broadcaster) Subscribe(idx chan int, done chan Op) {
 							//fmt.Printf("SnapshotIdx %v why we recieve this index %v while expect %v\n", b.rf.SnapshotIdx, buffer[index-firstIdx].CommandIndex, index)
 							close(done)
 						} else {
-							done <- earlyCommingMsgs[index-firstIdx].Command.(Op)
+							done <- earlyCommingMsgs[index-firstIdx].Command
 						}
 						return
 					}
 				}
 				for msg := range sub.channel {
 					if msg.CommandIndex == index {
-						done <- msg.Command.(Op)
+						done <- msg.Command
 						return
 					} else if msg.CommandIndex > index {
 						//fmt.Printf("Show me snapshotIdx %v commandIdx %v and index %v\n", b.rf.SnapshotIdx, msg.CommandIndex, index)

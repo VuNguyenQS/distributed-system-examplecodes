@@ -1,7 +1,6 @@
 package raft
 
 import (
-	"fmt"
 	"time"
 )
 
@@ -33,9 +32,9 @@ func (rf *Raft) sendInstallSnapshot(server int, args *InstallSnapshotArgs, reply
 }
 
 func (rf *Raft) leaderWork(leaderTerm int) {
-	fmt.Fprintln(rf.out, "become leader at term ", leaderTerm)
+	DFprintln(rf.out, "become leader at term ", leaderTerm)
 	for i := 0; !rf.killed() && rf.Term == leaderTerm; i++ {
-		fmt.Fprintf(rf.out, "send hearbeat at %v\n", i)
+		DFprintf(rf.out, "send hearbeat at %v\n", i)
 		args := AppendEntriesArgs{}
 		args.CommitedIdx = rf.commitedIdx
 		args.LeaderId = rf.me
@@ -105,7 +104,7 @@ func (rf *Raft) replicateCommand(server int, index int, args AppendEntriesArgs, 
 			*replicas++
 			*serverCommited = append(*serverCommited, server)
 			if !rf.killed() && *replicas > rf.numPeers/2 {
-				fmt.Fprintln(rf.out, "replicas ", *replicas, "current commitedIdx ", rf.commitedIdx, " snapshotIdx ", rf.SnapshotIdx, " and index ", index, " commited", " servers ", *serverCommited)
+				DFprintln(rf.out, "replicas ", *replicas, "current commitedIdx ", rf.commitedIdx, " snapshotIdx ", rf.SnapshotIdx, " and index ", index, " commited", " servers ", *serverCommited)
 				rf.commandApplyMsg(index)
 				rf.commitedIdx = index
 			}

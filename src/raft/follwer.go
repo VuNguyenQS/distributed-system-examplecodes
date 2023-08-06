@@ -1,7 +1,6 @@
 package raft
 
 import (
-	"fmt"
 	"time"
 )
 
@@ -22,12 +21,12 @@ func (rf *Raft) waitLeader(session int, term int) {
 	if rf.killed() {
 		return
 	}
-	fmt.Fprintln(rf.out, "follwer start wait at term ", term, " in session ", session, " with timeout ", rf.timeout)
+	DFprintln(rf.out, "follwer start wait at term ", term, " in session ", session, " with timeout ", rf.timeout)
 	time.Sleep(rf.timeout)
 	rf.mu.Lock()
 	defer rf.mu.Unlock()
 	if session == rf.Session {
-		fmt.Fprintln(rf.out, rf.state, " wait for ", rf.timeout, "is out")
+		DFprintln(rf.out, rf.state, " wait for ", rf.timeout, "is out")
 		rf.electLeader()
 	}
 }

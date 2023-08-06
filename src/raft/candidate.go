@@ -1,7 +1,6 @@
 package raft
 
 import (
-	"fmt"
 	"time"
 )
 
@@ -12,7 +11,7 @@ func (rf *Raft) electLeader() {
 	electOut := false // debug info
 	for !rf.killed() && rf.Term == term && rf.state == candidate {
 		if electOut {
-			fmt.Fprintln(rf.out, "candidate wait at term ", rf.Term, "is out")
+			DFprintln(rf.out, "candidate wait at term ", rf.Term, "is out")
 		}
 		rf.Term++
 		rf.VotedFor = rf.me
@@ -26,7 +25,7 @@ func (rf *Raft) electLeader() {
 			rf.Log[len(rf.Log)-1].Term,
 		}
 		rf.mu.Unlock()
-		fmt.Fprintln(rf.out, "candidate start at term ", term, " with timeout ", rf.timeout, " and args ", args)
+		DFprintln(rf.out, "candidate start at term ", term, " with timeout ", rf.timeout, " and args ", args)
 		votes := 1
 		for peerId := 0; peerId < rf.numPeers; peerId++ {
 			if peerId != rf.me {
@@ -92,7 +91,7 @@ func (rf *Raft) sendRequestVote(server int, votes *int, args *RequestVoteArgs, r
 		if ok := rf.peers[server].Call("Raft.RequestVote", args, reply); ok {
 			rf.mu.Lock()
 			defer rf.mu.Unlock()
-			fmt.Fprintln(rf.out, "we demand vote at term ", args.Term, " and recieve reply ", *reply, " at state ", rf.state, " at term ", rf.Term, " with current vote ", *votes)
+			DFprintln(rf.out, "we demand vote at term ", args.Term, " and recieve reply ", *reply, " at state ", rf.state, " at term ", rf.Term, " with current vote ", *votes)
 			if reply.VoteGranted {
 				if rf.Term == args.Term && rf.state == candidate {
 					*votes += 1

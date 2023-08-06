@@ -4,14 +4,20 @@ package shardctrler
 // Shardctrler clerk.
 //
 
-import "6.5840/labrpc"
-import "time"
-import "crypto/rand"
-import "math/big"
+import (
+	"crypto/rand"
+	"math/big"
+	"time"
+
+	"6.5840/labrpc"
+)
 
 type Clerk struct {
 	servers []*labrpc.ClientEnd
 	// Your data here.
+	leader          int
+	lastCompletedId int64
+	n               int
 }
 
 func nrand() int64 {
@@ -25,19 +31,25 @@ func MakeClerk(servers []*labrpc.ClientEnd) *Clerk {
 	ck := new(Clerk)
 	ck.servers = servers
 	// Your code here.
+	ck.n = len(servers)
 	return ck
 }
 
 func (ck *Clerk) Query(num int) Config {
-	args := &QueryArgs{}
+	args := &QueryArgs{nrand(), num, ck.lastCompletedId}
 	// Your code here.
-	args.Num = num
+	//fmt.Printf("start query\n")
 	for {
 		// try each known server.
-		for _, srv := range ck.servers {
+		for i := 0; i < ck.n; i++ {
+			servIdx := (ck.leader + i) % ck.n
+			srv := ck.servers[servIdx]
 			var reply QueryReply
-			ok := srv.Call("ShardCtrler.Query", args, &reply)
-			if ok && reply.WrongLeader == false {
+			unreliableRequest(srv, "ShardCtrler.Query", args, &reply)
+			if reply.Err == OK {
+				ck.leader = servIdx
+				ck.lastCompletedId = args.Id
+				//fmt.Printf("end query\n")
 				return reply.Config
 			}
 		}
@@ -46,16 +58,24 @@ func (ck *Clerk) Query(num int) Config {
 }
 
 func (ck *Clerk) Join(servers map[int][]string) {
-	args := &JoinArgs{}
+	groupOrder := []int{}
+	for group := range servers {
+		groupOrder = append(groupOrder, group)
+	}
+	args := &JoinArgs{nrand(), groupOrder, servers, ck.lastCompletedId}
 	// Your code here.
-	args.Servers = servers
-
+	//fmt.Printf("start join\n")
 	for {
 		// try each known server.
-		for _, srv := range ck.servers {
+		for i := 0; i < ck.n; i++ {
+			servIdx := (ck.leader + i) % ck.n
+			srv := ck.servers[servIdx]
 			var reply JoinReply
-			ok := srv.Call("ShardCtrler.Join", args, &reply)
-			if ok && reply.WrongLeader == false {
+			unreliableRequest(srv, "ShardCtrler.Join", args, &reply)
+			if reply.Err == OK {
+				ck.leader = servIdx
+				ck.lastCompletedId = args.Id
+				//fmt.Printf("end join\n")
 				return
 			}
 		}
@@ -64,16 +84,21 @@ func (ck *Clerk) Join(servers map[int][]string) {
 }
 
 func (ck *Clerk) Leave(gids []int) {
-	args := &LeaveArgs{}
+	args := &LeaveArgs{nrand(), gids, ck.lastCompletedId}
 	// Your code here.
-	args.GIDs = gids
-
+	//fmt.Printf("start leave\n")
 	for {
 		// try each known server.
-		for _, srv := range ck.servers {
+		for i := 0; i < ck.n; i++ {
+			servIdx := (ck.leader + i) % ck.n
+			srv := ck.servers[servIdx]
 			var reply LeaveReply
-			ok := srv.Call("ShardCtrler.Leave", args, &reply)
-			if ok && reply.WrongLeader == false {
+			//srv.Call("ShardCtrler.Leave", args, &reply)
+			unreliableRequest(srv, "ShardCtrler.Leave", args, &reply)
+			if reply.Err == OK {
+				ck.leader = servIdx
+				ck.lastCompletedId = args.Id
+				//fmt.Printf("endleave\n")
 				return
 			}
 		}
@@ -82,20 +107,40 @@ func (ck *Clerk) Leave(gids []int) {
 }
 
 func (ck *Clerk) Move(shard int, gid int) {
-	args := &MoveArgs{}
+	args := &MoveArgs{nrand(), shard, gid, ck.lastCompletedId}
 	// Your code here.
 	args.Shard = shard
 	args.GID = gid
-
+	//fmt.Printf("start move\n")
 	for {
 		// try each known server.
-		for _, srv := range ck.servers {
-			var reply MoveReply
-			ok := srv.Call("ShardCtrler.Move", args, &reply)
-			if ok && reply.WrongLeader == false {
+		for i := 0; i < ck.n; i++ {
+			servIdx := (ck.leader + i) % ck.n
+			srv := ck.servers[servIdx]
+			var reply LeaveReply
+			unreliableRequest(srv, "ShardCtrler.Move", args, &reply)
+			if reply.Err == OK {
+				ck.leader = servIdx
+				ck.lastCompletedId = args.Id
+				//fmt.Printf("end move\n")
 				return
 			}
 		}
 		time.Sleep(100 * time.Millisecond)
+	}
+}
+
+func unreliableRequest(srv *labrpc.ClientEnd, svcMeth string, args interface{}, reply interface{}) {
+	done := make(chan bool)
+	timeOut := time.After(time.Second)
+	go func() {
+		done <- srv.Call(svcMeth, args, reply)
+	}()
+	select {
+	case <-done:
+	case <-timeOut:
+		go func() {
+			<-done
+		}()
 	}
 }

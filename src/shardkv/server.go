@@ -1,18 +1,17 @@
 package shardkv
 
+import (
+	"os"
+	"strconv"
+	"sync"
+	"sync/atomic"
 
-import "6.5840/labrpc"
-import "6.5840/raft"
-import "sync"
-import "6.5840/labgob"
-
-
-
-type Op struct {
-	// Your definitions here.
-	// Field names must start with capital letters,
-	// otherwise RPC will break.
-}
+	"6.5840/kvraft"
+	"6.5840/labgob"
+	"6.5840/labrpc"
+	"6.5840/raft"
+	"6.5840/shardctrler"
+)
 
 type ShardKV struct {
 	mu           sync.Mutex
@@ -25,15 +24,135 @@ type ShardKV struct {
 	maxraftstate int // snapshot if log grows this big
 
 	// Your definitions here.
+	logFile           string
+	out               *os.File
+	dead              int32
+	mck               *shardctrler.Clerk
+	db                *Database
+	publisher         kvraft.Broadcaster
+	isConfigCompleted bool
+	oldShardToGroup   [shardctrler.NShards]int
+	currentConfig     *shardctrler.Config
+	servingShards     map[int]bool
+	newShards         map[int]bool
+	movedShards       map[int]bool
 }
-
 
 func (kv *ShardKV) Get(args *GetArgs, reply *GetReply) {
 	// Your code here.
+
+	isApplied, value := kv.db.isApplied(args.Id, args.Key)
+	if isApplied {
+		reply.Err = OK
+		reply.Value = value
+		return
+	}
+
+	switch response := kv.excuteCommand(*args).(type) {
+	case GetReply:
+		if response.Id == args.Id {
+			*reply = response
+		}
+	case string:
+		reply.Err = ErrWrongLeader
+	default:
+	}
+}
+
+func (kv *ShardKV) GetDebug(args *GetArgs, reply *GetReply) {
+	// Your code here.
+
+	isApplied, value := kv.db.isApplied(args.Id, args.Key)
+	if isApplied {
+		reply.Err = OK
+		reply.Value = value
+		return
+	}
+
+	switch response := kv.excuteCommand(*args).(type) {
+	case GetReply:
+		if response.Id == args.Id {
+			*reply = response
+		}
+		//shard := key2shard(args.Key)
+		//fmt.Printf("group %v shard %v \n oldshardGroup %v\n config %v\n OpLog%v\n",
+		//	kv.gid, shard, kv.oldShardToGroup, kv.currentConfig, kv.db.shards[shard].OpLog[args.Key])
+	case string:
+		reply.Err = ErrWrongLeader
+	default:
+	}
 }
 
 func (kv *ShardKV) PutAppend(args *PutAppendArgs, reply *PutAppendReply) {
 	// Your code here.
+	isApplied, _ := kv.db.isApplied(args.Id, args.Key)
+	if isApplied {
+		reply.Err = OK
+		return
+	}
+
+	switch response := kv.excuteCommand(*args).(type) {
+	case PutAppendReply:
+		if response.Id == args.Id {
+			*reply = response
+			//shard := key2shard(args.Key)
+
+		}
+	case string:
+		reply.Err = ErrWrongLeader
+
+	default:
+	}
+}
+
+func (kv *ShardKV) isShardAlready(configNum int, shardNum int) bool {
+	kv.mu.Lock()
+	defer kv.mu.Unlock()
+
+	if configNum < kv.currentConfig.Num {
+		return true
+	}
+
+	if configNum == kv.currentConfig.Num && kv.db.isShardPresence(shardNum) {
+		return true
+	}
+
+	return false
+
+}
+
+func (kv *ShardKV) PutShard(args *PutShardArgs, reply *PutShardReply) {
+
+	if kv.isShardAlready(args.ConfigNum, args.ShardNum) {
+		reply.Err = OK
+		return
+	}
+
+	switch response := kv.excuteCommand(*args).(type) {
+	case PutShardReply:
+		if args.ShardNum == response.ShardNum && args.ConfigNum == response.ConfigNum {
+			*reply = response
+		}
+	case string:
+		reply.Err = ErrWrongLeader
+	default:
+	}
+}
+
+func (kv *ShardKV) excuteCommand(command interface{}) interface{} {
+	idx := make(chan int)
+	done := make(chan interface{})
+	kv.publisher.Subscribe(idx, done)
+
+	index, _, isLeader := kv.rf.Start(command)
+
+	idx <- index
+
+	if !isLeader {
+		return ErrWrongLeader
+	}
+	//fmt.Printf("server %v group %v command %v \n", kv.me, kv.gid, command)
+	return <-done
 }
 
 // the tester calls Kill() when a ShardKV instance won't
@@ -41,10 +160,17 @@ func (kv *ShardKV) PutAppend(args *PutAppendArgs, reply *PutAppendReply) {
 // in Kill(), but it might be convenient to (for example)
 // turn off debug output from this instance.
 func (kv *ShardKV) Kill() {
+	atomic.StoreInt32(&kv.dead, 1)
 	kv.rf.Kill()
 	// Your code here, if desired.
+	//DPrintf(kv.out, "shutdown\n")
+	//DPrintf(kv.out, "%v\n", kv.db.shards[key2shard("0")].Data["0"])
 }
 
+func (kv *ShardKV) killed() bool {
+	z := atomic.LoadInt32(&kv.dead)
+	return z == 1
+}
 
 // servers[] contains the ports of the servers in this group.
 //
@@ -75,23 +201,39 @@ func (kv *ShardKV) Kill() {
 func StartServer(servers []*labrpc.ClientEnd, me int, persister *raft.Persister, maxraftstate int, gid int, ctrlers []*labrpc.ClientEnd, make_end func(string) *labrpc.ClientEnd) *ShardKV {
 	// call labgob.Register on structures you want
 	// Go's RPC library to marshall/unmarshall.
-	labgob.Register(Op{})
+
+	labgob.Register(GetArgs{})
+	labgob.Register(PutAppendArgs{})
+	labgob.Register(PutShardArgs{})
+	labgob.Register(shardctrler.Config{})
 
 	kv := new(ShardKV)
 	kv.me = me
 	kv.maxraftstate = maxraftstate
-	kv.make_end = make_end
 	kv.gid = gid
 	kv.ctrlers = ctrlers
 
+	kv.logFile = "logInfo/" + "sv" + strconv.Itoa(kv.me) + "gid" + strconv.Itoa(kv.gid) + ".txt"
+	kv.out, _ = os.OpenFile(kv.logFile, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0666)
+
+	kv.db = new(Database)
+	for i := 0; i < shardctrler.NShards; i++ {
+		kv.db.conds[i] = sync.NewCond(&kv.db.mus[i])
+	}
+	kv.igestSnap(persister.ReadSnapshot())
+	//readPersist(kv.out, persister)
+
+	kv.make_end = make_end
 	// Your initialization code here.
 
 	// Use something like this to talk to the shardctrler:
-	// kv.mck = shardctrler.MakeClerk(kv.ctrlers)
+	kv.mck = shardctrler.MakeClerk(kv.ctrlers)
 
 	kv.applyCh = make(chan raft.ApplyMsg)
 	kv.rf = raft.Make(servers, me, persister, kv.applyCh)
 
+	go kv.applier(persister)
+	go kv.pollConfiguration()
 
 	return kv
 }

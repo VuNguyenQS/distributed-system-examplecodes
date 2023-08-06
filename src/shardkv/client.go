@@ -8,11 +8,14 @@ package shardkv
 // talks to the group that holds the key's shard.
 //
 
-import "6.5840/labrpc"
-import "crypto/rand"
-import "math/big"
-import "6.5840/shardctrler"
-import "time"
+import (
+	"crypto/rand"
+	"math/big"
+	"time"
+
+	"6.5840/labrpc"
+	"6.5840/shardctrler"
+)
 
 // which shard is a key in?
 // please use this function,
@@ -38,6 +41,7 @@ type Clerk struct {
 	config   shardctrler.Config
 	make_end func(string) *labrpc.ClientEnd
 	// You will have to modify this struct.
+	completedId [shardctrler.NShards]int64
 }
 
 // the tester calls MakeClerk.
@@ -60,23 +64,64 @@ func MakeClerk(ctrlers []*labrpc.ClientEnd, make_end func(string) *labrpc.Client
 // keeps trying forever in the face of all other errors.
 // You will have to modify this function.
 func (ck *Clerk) Get(key string) string {
-	args := GetArgs{}
-	args.Key = key
+	shard := key2shard(key)
+	args := GetArgs{nrand(), key, ck.completedId[shard]}
 
 	for {
-		shard := key2shard(key)
 		gid := ck.config.Shards[shard]
 		if servers, ok := ck.config.Groups[gid]; ok {
 			// try each server for the shard.
 			for si := 0; si < len(servers); si++ {
 				srv := ck.make_end(servers[si])
 				var reply GetReply
-				ok := srv.Call("ShardKV.Get", &args, &reply)
-				if ok && (reply.Err == OK || reply.Err == ErrNoKey) {
-					return reply.Value
+				ok := unreliableRequest(srv, "ShardKV.Get", &args, &reply)
+				if ok {
+					if reply.Err == OK {
+						ck.completedId[shard] = args.Id
+						return reply.Value
+					}
+					if reply.Err == ErrWrongGroup {
+						break
+					}
+					if reply.Err == ErrShardNotPresent {
+						time.Sleep(50 * time.Millisecond)
+					}
 				}
-				if ok && (reply.Err == ErrWrongGroup) {
-					break
+
+				// ... not ok, or ErrWrongLeader
+			}
+		}
+		time.Sleep(100 * time.Millisecond)
+		// ask controler for the latest configuration.
+		ck.config = ck.sm.Query(-1)
+	}
+
+	return ""
+}
+
+func (ck *Clerk) GetDebug(key string) string {
+	shard := key2shard(key)
+	args := GetArgs{nrand(), key, ck.completedId[shard]}
+
+	for {
+		gid := ck.config.Shards[shard]
+		if servers, ok := ck.config.Groups[gid]; ok {
+			// try each server for the shard.
+			for si := 0; si < len(servers); si++ {
+				srv := ck.make_end(servers[si])
+				var reply GetReply
+				ok := unreliableRequest(srv, "ShardKV.GetDebug", &args, &reply)
+				if ok {
+					if reply.Err == OK {
+						ck.completedId[shard] = args.Id
+						return reply.Value
+					}
+					if reply.Err == ErrWrongGroup {
+						break
+					}
+					if reply.Err == ErrShardNotPresent {
+						time.Sleep(50 * time.Millisecond)
+					}
 				}
 				// ... not ok, or ErrWrongLeader
 			}
@@ -92,33 +137,36 @@ func (ck *Clerk) Get(key string) string {
 // shared by Put and Append.
 // You will have to modify this function.
 func (ck *Clerk) PutAppend(key string, value string, op string) {
-	args := PutAppendArgs{}
-	args.Key = key
-	args.Value = value
-	args.Op = op
-
-
+	shard := key2shard(key)
+	args := PutAppendArgs{nrand(), key, value, op, ck.completedId[shard]}
+	//fmt.Printf("key %v\n", key)
 	for {
-		shard := key2shard(key)
 		gid := ck.config.Shards[shard]
 		if servers, ok := ck.config.Groups[gid]; ok {
 			for si := 0; si < len(servers); si++ {
 				srv := ck.make_end(servers[si])
 				var reply PutAppendReply
-				ok := srv.Call("ShardKV.PutAppend", &args, &reply)
-				if ok && reply.Err == OK {
-					return
+				ok := unreliableRequest(srv, "ShardKV.PutAppend", &args, &reply)
+				if ok {
+					if reply.Err == OK {
+						ck.completedId[shard] = args.Id
+						return
+					}
+					if reply.Err == ErrWrongGroup {
+						break
+					}
+					if reply.Err == ErrShardNotPresent {
+						time.Sleep(50 * time.Millisecond)
+					}
 				}
-				if ok && reply.Err == ErrWrongGroup {
-					break
-				}
-				// ... not ok, or ErrWrongLeader
 			}
+			// ... not ok, or ErrWrongLeader
 		}
 		time.Sleep(100 * time.Millisecond)
 		// ask controler for the latest configuration.
 		ck.config = ck.sm.Query(-1)
 	}
+
 }
 
 func (ck *Clerk) Put(key string, value string) {
@@ -126,4 +174,21 @@ func (ck *Clerk) Put(key string, value string) {
 }
 func (ck *Clerk) Append(key string, value string) {
 	ck.PutAppend(key, value, "Append")
+}
+
+func unreliableRequest(srv *labrpc.ClientEnd, svcMeth string, args interface{}, reply interface{}) bool {
+	done := make(chan bool)
+	timeOut := time.After(time.Second)
+	go func() {
+		done <- srv.Call(svcMeth, args, reply)
+	}()
+	select {
+	case ok := <-done:
+		return ok
+	case <-timeOut:
+		go func() {
+			<-done
+		}()
+		return false
+	}
 }

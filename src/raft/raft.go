@@ -21,7 +21,6 @@ import (
 	//	"bytes"
 
 	"bytes"
-	"fmt"
 	"log"
 	"math/rand"
 	"os"
@@ -249,7 +248,7 @@ func (rf *Raft) Start(command interface{}) (int, int, bool) {
 		index = len(rf.Log) - 1 + rf.SnapshotIdx
 		term = rf.Term
 		rf.persist()
-		fmt.Fprintln(rf.out, "rieceve command ", command, " with idx ", index, " commitIdx ", rf.commitedIdx)
+		DFprintln(rf.out, "rieceve command ", command, " with idx ", index, " commitIdx ", rf.commitedIdx)
 		isLeader = true
 		args := AppendEntriesArgs{
 			term,
@@ -337,13 +336,13 @@ func Make(peers []*labrpc.ClientEnd, me int,
 
 	// Your initialization code here (2A, 2B, 2C).
 	rf.applyChannel = applyCh
-	rf.logFile = "Id" + strconv.Itoa(rf.me) + ".txt"
+	rf.logFile = "logInfo/Id" + strconv.Itoa(rf.me) + ".txt"
 	rf.out, _ = os.OpenFile(rf.logFile, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0666)
 	// initialize from state persisted before a crash
 	rf.readPersist(persister.ReadRaftState())
 	rf.SnapShot = persister.ReadSnapshot()
 
-	fmt.Fprintln(rf.out, "SERVER START OR RESTART WITH LOG ", rf.Log)
+	DFprintln(rf.out, "SERVER START OR RESTART WITH LOG ", rf.Log)
 
 	// start ticker goroutine to start elections
 	//go rf.ticker()
