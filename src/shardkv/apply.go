@@ -9,6 +9,11 @@ import (
 	"6.5840/shardctrler"
 )
 
+type DeleteShard struct {
+	ConfigNum int
+	ShardNum  int
+}
+
 func (kv *ShardKV) applier(persister *raft.Persister) {
 	for m := range kv.applyCh {
 		if m.CommandValid {
@@ -29,21 +34,25 @@ func (kv *ShardKV) applier(persister *raft.Persister) {
 			case PutShardArgs:
 				rep := PutShardReply{arg.ConfigNum, arg.ShardNum, OK}
 				kv.mu.Lock()
-				currentCgNum := kv.currentConfig.Num
-				if currentCgNum < arg.ConfigNum {
-					kv.db.putShard(&arg, kv.out)
-				} else if currentCgNum == arg.ConfigNum {
-					if kv.movedShards[arg.ShardNum] {
-						kv.db.deleteShard(arg.ShardNum)
-					} else if !kv.db.isShardPresence(arg.ShardNum) {
-						kv.db.putShard(&arg, kv.out)
-					}
+				if kv.currentConfig.Num <= arg.ConfigNum {
+					kv.db.putShard(&arg, kv.out, kv.gid)
 				}
 				kv.mu.Unlock()
 				m.Command = rep
 
+			case DeleteShard:
+				kv.mu.Lock()
+				if kv.currentConfig.Num == arg.ConfigNum {
+					if !kv.movedShards[arg.ShardNum] {
+						log.Fatalf("while delete shard %v at config %v not in movedShards %v\n",
+							arg.ShardNum, arg.ConfigNum, kv.movedShards)
+					}
+					kv.db.deleteShard(arg.ShardNum)
+				}
+				kv.mu.Unlock()
+
 			case shardctrler.Config:
-				kv.setupConfig(&arg)
+				kv.setupConfig(arg)
 
 			}
 

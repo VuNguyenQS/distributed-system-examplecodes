@@ -42,6 +42,7 @@ type Clerk struct {
 	make_end func(string) *labrpc.ClientEnd
 	// You will have to modify this struct.
 	completedId [shardctrler.NShards]int64
+	//prevVal     map[string]string
 }
 
 // the tester calls MakeClerk.
@@ -138,7 +139,7 @@ func (ck *Clerk) GetDebug(key string) string {
 // You will have to modify this function.
 func (ck *Clerk) PutAppend(key string, value string, op string) {
 	shard := key2shard(key)
-	args := PutAppendArgs{nrand(), key, value, op, ck.completedId[shard]}
+	args := PutAppendArgs{nrand(), key, value, op, ck.completedId[shard]} //ck.prevVal[key],
 	//fmt.Printf("key %v\n", key)
 	for {
 		gid := ck.config.Shards[shard]
@@ -150,6 +151,7 @@ func (ck *Clerk) PutAppend(key string, value string, op string) {
 				if ok {
 					if reply.Err == OK {
 						ck.completedId[shard] = args.Id
+						//ck.prevVal[key] += value
 						return
 					}
 					if reply.Err == ErrWrongGroup {

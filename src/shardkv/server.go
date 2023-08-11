@@ -124,6 +124,8 @@ func (kv *ShardKV) isShardAlready(configNum int, shardNum int) bool {
 func (kv *ShardKV) PutShard(args *PutShardArgs, reply *PutShardReply) {
 
 	if kv.isShardAlready(args.ConfigNum, args.ShardNum) {
+		DPrintf(kv.out, "already riecieve shard %v from group %v from config %v",
+			args.ShardNum, args.FromGid, args.ConfigNum)
 		reply.Err = OK
 		return
 	}
@@ -163,8 +165,7 @@ func (kv *ShardKV) Kill() {
 	atomic.StoreInt32(&kv.dead, 1)
 	kv.rf.Kill()
 	// Your code here, if desired.
-	//DPrintf(kv.out, "shutdown\n")
-	//DPrintf(kv.out, "%v\n", kv.db.shards[key2shard("0")].Data["0"])
+	DPrintf(kv.out, "shutdown\n")
 }
 
 func (kv *ShardKV) killed() bool {
@@ -206,6 +207,7 @@ func StartServer(servers []*labrpc.ClientEnd, me int, persister *raft.Persister,
 	labgob.Register(PutAppendArgs{})
 	labgob.Register(PutShardArgs{})
 	labgob.Register(shardctrler.Config{})
+	labgob.Register(DeleteShard{})
 
 	kv := new(ShardKV)
 	kv.me = me
@@ -231,7 +233,7 @@ func StartServer(servers []*labrpc.ClientEnd, me int, persister *raft.Persister,
 
 	kv.applyCh = make(chan raft.ApplyMsg)
 	kv.rf = raft.Make(servers, me, persister, kv.applyCh)
-
+	DPrintf(kv.out, "start server\n")
 	go kv.applier(persister)
 	go kv.pollConfiguration()
 

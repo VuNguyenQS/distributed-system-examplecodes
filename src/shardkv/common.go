@@ -30,6 +30,7 @@ type PutAppendArgs struct {
 	// Field names must start with capital letters,
 	// otherwise RPC will break.
 	PrevId int64
+	//PrevVal string
 }
 
 type PutAppendReply struct {
@@ -56,6 +57,7 @@ type PutShardArgs struct {
 	ShardNum       int
 	AppliedCommand map[int64]bool
 	Data           map[string]string
+	History        []int
 }
 
 type PutShardReply struct {

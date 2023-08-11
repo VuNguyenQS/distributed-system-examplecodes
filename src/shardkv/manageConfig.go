@@ -1,6 +1,7 @@
 package shardkv
 
 import (
+	"log"
 	"sync"
 	"time"
 
@@ -26,7 +27,7 @@ func (kv *ShardKV) pollConfiguration() {
 	}
 }
 
-func (kv *ShardKV) setupConfig(commingCg *shardctrler.Config) {
+func (kv *ShardKV) setupConfig(commingCg shardctrler.Config) {
 	// clear for old config
 	kv.mu.Lock()
 	defer kv.mu.Unlock()
@@ -34,18 +35,23 @@ func (kv *ShardKV) setupConfig(commingCg *shardctrler.Config) {
 	if commingCg.Num != kv.currentConfig.Num+1 {
 		return
 	}
-	DPrintf(kv.out, "setup config %v shards %v\n", commingCg.Num, commingCg.Shards)
+	DPrintf(kv.out, "setup newconfig %v shards %v oldConfig %v\n", commingCg.Num, commingCg.Shards, kv.currentConfig.Num)
 
 	if !kv.isConfigCompleted {
 		// delete movedshard
 		for movedShard := range kv.movedShards {
-			kv.db.deleteShard(movedShard)
+			kv.db.mus[movedShard].Lock()
+			if !kv.db.shards[movedShard].IsValid && kv.db.shards[movedShard].Data != nil {
+				log.Fatalf("why shard %v at config %v is not deleted", movedShard, kv.currentConfig.Num)
+			}
+			kv.db.mus[movedShard].Unlock()
+			//kv.db.deleteShard(movedShard)
 		}
 	}
 
 	kv.isConfigCompleted = false
 	kv.oldShardToGroup = kv.currentConfig.Shards
-	kv.currentConfig = commingCg
+	kv.currentConfig = &commingCg
 	ShardtoGroup := kv.currentConfig.Shards
 	oldShards := kv.servingShards
 	shards := map[int]bool{}
@@ -57,7 +63,7 @@ func (kv *ShardKV) setupConfig(commingCg *shardctrler.Config) {
 			if oldShards[shardNum] {
 				delete(oldShards, shardNum)
 			} else {
-				kv.db.setValid(shardNum, isFirst)
+				kv.db.setValid(shardNum, isFirst, kv.gid)
 				newShards[shardNum] = true
 			}
 			shards[shardNum] = true
@@ -88,14 +94,13 @@ func (kv *ShardKV) completeCurrentConfig() (bool, int) {
 	}
 
 	for movedShard := range kv.movedShards {
-		shard := kv.db.deleteShard(movedShard)
+		shard := kv.db.getCopyShard(movedShard)
 		if shard != nil {
 			done.Add(1)
-			args := PutShardArgs{config.Num, kv.gid, movedShard, shard.AppliedCommand, shard.Data}
+			args := PutShardArgs{config.Num, kv.gid, movedShard, shard.AppliedCommand, shard.Data, shard.History}
 			desGID := config.Shards[movedShard]
 
 			go func(format string, shard int) {
-				defer DPrintf(kv.out, format, shard, desGID)
 				defer done.Done()
 
 				desServers := config.Groups[desGID]
@@ -112,11 +117,11 @@ func (kv *ShardKV) completeCurrentConfig() (bool, int) {
 						select {
 						case <-done:
 							if reply.Err == OK {
-								args.AppliedCommand = nil
-								args.Data = nil
+								DPrintf(kv.out, format, shard, desGID)
+								command := DeleteShard{args.ConfigNum, args.ShardNum}
 								for !kv.killed() {
-									switch response := kv.excuteCommand(args).(type) {
-									case PutShardReply:
+									switch response := kv.excuteCommand(command).(type) {
+									case DeleteShard:
 										if args.ShardNum == response.ShardNum && args.ConfigNum == response.ConfigNum {
 											return
 										}
@@ -142,6 +147,10 @@ func (kv *ShardKV) completeCurrentConfig() (bool, int) {
 	done.Wait()
 
 	kv.mu.Lock()
+
+	if kv.killed() {
+		return false, 0
+	}
 	if kv.currentConfig.Num == config.Num {
 		kv.isConfigCompleted = true
 		DPrintf(kv.out, "succeed to complete config %v\n", config.Num)
